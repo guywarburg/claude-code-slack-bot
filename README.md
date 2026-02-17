@@ -1,21 +1,31 @@
-# Claude Code Slack Bot
+# Claude Code Slack Bot (CLI Fork)
 
-A Slack bot that integrates with Claude Code SDK to provide AI-powered coding assistance directly in your Slack workspace.
+A Slack bot that integrates with your **local** Claude Code CLI to provide AI-powered coding assistance directly in your Slack workspace.
+
+> **Note**: This is a fork of [mpociot/claude-code-slack-bot](https://github.com/mpociot/claude-code-slack-bot) that replaces the `@anthropic-ai/claude-code` SDK with direct CLI invocation. This lets you control your local Claude Code instance from Slack.
 
 ## Features
 
-- 🤖 Direct message support - chat with the bot privately
-- 💬 Thread support - maintains conversation context within threads
-- 🔄 Streaming responses - see Claude's responses as they're generated
-- 📝 Markdown formatting - code blocks and formatting are preserved
-- 🔧 Session management - maintains conversation context across messages
-- ⚡ Real-time updates - messages update as Claude thinks
+- Direct message support - chat with the bot privately
+- Thread support - maintains conversation context within threads
+- Streaming responses - see Claude's responses as they're generated
+- Markdown formatting - code blocks and formatting are preserved
+- Session management - maintains conversation context across messages (using `--resume`)
+- Real-time updates - messages update as Claude thinks
+- File uploads - analyze uploaded files and images
+- MCP server support - extend Claude with additional tools
 
 ## Prerequisites
 
 - Node.js 18+ installed
+- **Claude Code CLI installed and authenticated:**
+  ```bash
+  npm install -g @anthropic-ai/claude-code
+  claude login
+  ```
 - A Slack workspace where you can install apps
-- Claude Code
+
+> **No API key needed** - the bot uses your existing Claude Code CLI authentication.
 
 ## Setup
 
@@ -48,7 +58,7 @@ After creating the app (either method), you need to:
 #### Generate Tokens
 1. Go to "OAuth & Permissions" and install the app to your workspace
 2. Copy the "Bot User OAuth Token" (starts with `xoxb-`)
-3. Go to "Basic Information" → "App-Level Tokens"
+3. Go to "Basic Information" -> "App-Level Tokens"
 4. Generate a token with `connections:write` scope
 5. Copy the token (starts with `xapp-`)
 
@@ -71,12 +81,11 @@ SLACK_BOT_TOKEN=xoxb-your-bot-token
 SLACK_APP_TOKEN=xapp-your-app-token
 SLACK_SIGNING_SECRET=your-signing-secret
 
-# Claude Code Configuration
-# This is only needed if you don't use a Claude subscription
+# Working Directory Configuration
+BASE_DIRECTORY=/Users/username/Code/
 
-# ANTHROPIC_API_KEY=your-anthropic-api-key
-# CLAUDE_CODE_USE_BEDROCK=1
-# CLAUDE_CODE_USE_VERTEX=1
+# Claude CLI Configuration
+PERMISSION_MODE=skip
 ```
 
 ### 5. Run the Bot
@@ -88,6 +97,23 @@ npm run dev
 # Production mode
 npm run build
 npm run prod
+```
+
+## Permission Modes
+
+The bot supports different permission modes via the `PERMISSION_MODE` environment variable:
+
+| Mode | CLI Flag | Description |
+|------|----------|-------------|
+| `skip` (default) | `--dangerously-skip-permissions` | No permission prompts, Claude has full access |
+| `allowedTools` | `--allowedTools <list>` | Only allow specific tools (configured via `ALLOWED_TOOLS`) |
+| `acceptEdits` | `--permission-mode acceptEdits` | Auto-accept file edits, prompt for other actions |
+| `default` | Permission MCP server | Slack-based permission prompts via interactive buttons |
+
+### Example: Restricting to safe tools only
+```env
+PERMISSION_MODE=allowedTools
+ALLOWED_TOOLS=Read,Grep,Glob
 ```
 
 ## Usage
@@ -127,18 +153,6 @@ get directory
 - **Channels**: Working directory is set for the entire channel (prompted when bot joins)
 - **Threads**: Can override the channel/DM directory for a specific thread by mentioning the bot
 
-### Base Directory Configuration
-
-You can configure a base directory in your `.env` file to use relative paths:
-
-```env
-BASE_DIRECTORY=/Users/username/Code/
-```
-
-With this set, you can use:
-- `cwd herd-website` → resolves to `/Users/username/Code/herd-website`
-- `cwd /absolute/path` → uses absolute path directly
-
 ### Direct Messages
 Simply send a direct message to the bot with your request:
 ```
@@ -161,7 +175,7 @@ You can override the channel's default working directory for a specific thread:
 ```
 
 ### Threads
-Reply in a thread to maintain conversation context. The bot will remember previous messages in the thread.
+Reply in a thread to maintain conversation context. The bot will remember previous messages in the thread using Claude Code's `--resume` flag.
 
 ### File Uploads
 You can upload files and images directly to any conversation:
@@ -181,7 +195,7 @@ You can upload files and images directly to any conversation:
 
 ### MCP (Model Context Protocol) Servers
 
-The bot supports MCP servers to extend Claude's capabilities with additional tools and resources.
+The bot supports MCP servers to extend Claude's capabilities with additional tools.
 
 #### Setup MCP Servers
 
@@ -199,7 +213,7 @@ The bot supports MCP servers to extend Claude's capabilities with additional too
          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/files"]
        },
        "github": {
-         "command": "npx", 
+         "command": "npx",
          "args": ["-y", "@modelcontextprotocol/server-github"],
          "env": {
            "GITHUB_TOKEN": "your-token"
@@ -214,30 +228,30 @@ The bot supports MCP servers to extend Claude's capabilities with additional too
 - **View configured servers**: `mcp` or `servers`
 - **Reload configuration**: `mcp reload`
 
-#### Available MCP Servers
-
-- **Filesystem**: File system access (`@modelcontextprotocol/server-filesystem`)
-- **GitHub**: GitHub API integration (`@modelcontextprotocol/server-github`)
-- **PostgreSQL**: Database access (`@modelcontextprotocol/server-postgres`)
-- **Web Search**: Search capabilities (custom servers)
-
-All MCP tools are automatically allowed and follow the pattern: `mcp__serverName__toolName`
-
 ## Advanced Configuration
 
-### Using AWS Bedrock
-Set these environment variables:
+### CLI Options
+
+| Environment Variable | Description | Default |
+|---------------------|-------------|---------|
+| `CLAUDE_CLI_PATH` | Path to claude binary | `claude` |
+| `PERMISSION_MODE` | Permission handling mode | `skip` |
+| `ALLOWED_TOOLS` | Comma-separated list of allowed tools | `Bash,Read,Write,Edit,MultiEdit,Grep,Glob` |
+| `CLAUDE_MODEL` | Model to use | CLI default |
+| `MAX_TURNS` | Maximum agentic turns | CLI default |
+| `APPEND_SYSTEM_PROMPT` | Additional system prompt | none |
+
+### Base Directory Configuration
+
+You can configure a base directory in your `.env` file to use relative paths:
+
 ```env
-CLAUDE_CODE_USE_BEDROCK=1
-# AWS credentials should be configured via AWS CLI or IAM roles
+BASE_DIRECTORY=/Users/username/Code/
 ```
 
-### Using Google Vertex AI
-Set these environment variables:
-```env
-CLAUDE_CODE_USE_VERTEX=1
-# Google Cloud credentials should be configured
-```
+With this set, you can use:
+- `cwd herd-website` -> resolves to `/Users/username/Code/herd-website`
+- `cwd /absolute/path` -> uses absolute path directly
 
 ## Development
 
@@ -250,21 +264,36 @@ DEBUG=true
 
 This will show detailed logs including:
 - Incoming Slack messages
-- Claude SDK request/response details
+- Claude CLI invocation details
 - Session management operations
 - Message streaming updates
 
 ### Project Structure
 ```
 src/
-├── index.ts          # Application entry point
-├── config.ts         # Configuration management
+├── index.ts                      # Application entry point
+├── config.ts                     # Configuration management
 ├── types.ts                      # TypeScript type definitions
-├── claude-handler.ts             # Claude Code SDK integration
+├── claude-handler.ts             # Claude CLI integration (modified from SDK)
 ├── slack-handler.ts              # Slack event handling
 ├── working-directory-manager.ts  # Working directory management
+├── file-handler.ts               # File upload handling
+├── image-handler.ts              # Image processing
+├── todo-manager.ts               # Todo list management
+├── mcp-manager.ts                # MCP server configuration
+├── permission-mcp-server.ts      # Slack permission prompts (MCP)
 └── logger.ts                     # Logging utility
 ```
+
+### What Changed from Original
+
+This fork only modifies one file significantly:
+
+- **`src/claude-handler.ts`** - Complete rewrite to use CLI spawn instead of SDK
+- **`src/slack-handler.ts`** - Two lines changed (import swap from `SDKMessage` to `CLIMessage`)
+- **`package.json`** - Removed `@anthropic-ai/claude-code` dependency
+
+The CLI's `--output-format stream-json` produces the same message structure as the SDK, so `slack-handler.ts` (which consumes these messages) works unchanged.
 
 ### Available Scripts
 - `npm run dev` - Start in development mode with hot reload
@@ -280,8 +309,13 @@ src/
 3. Ensure the bot has been invited to the channel
 4. Check Slack app permissions are configured correctly
 
+### CLI not found
+1. Ensure Claude Code is installed globally: `npm install -g @anthropic-ai/claude-code`
+2. Check that `claude` is in your PATH: `which claude`
+3. If using a custom path, set `CLAUDE_CLI_PATH` in your `.env`
+
 ### Authentication errors
-1. Verify your Anthropic API key is valid
+1. Verify you're logged in to Claude Code: `claude login`
 2. Check Slack tokens haven't expired
 3. Ensure Socket Mode is enabled
 
