@@ -4,9 +4,55 @@ import { config } from './config';
 import * as path from 'path';
 import * as fs from 'fs';
 
+const PERSISTENCE_FILE = path.join(process.cwd(), 'working-directories.json');
+
 export class WorkingDirectoryManager {
   private configs: Map<string, WorkingDirectoryConfig> = new Map();
   private logger = new Logger('WorkingDirectoryManager');
+
+  constructor() {
+    this.loadFromFile();
+  }
+
+  private loadFromFile(): void {
+    try {
+      if (fs.existsSync(PERSISTENCE_FILE)) {
+        const data = fs.readFileSync(PERSISTENCE_FILE, 'utf-8');
+        const parsed = JSON.parse(data);
+
+        for (const [key, value] of Object.entries(parsed)) {
+          const configValue = value as WorkingDirectoryConfig;
+          // Convert date string back to Date object
+          configValue.setAt = new Date(configValue.setAt);
+          this.configs.set(key, configValue);
+        }
+
+        this.logger.info('Loaded working directory configurations', {
+          count: this.configs.size,
+          file: PERSISTENCE_FILE
+        });
+      }
+    } catch (error) {
+      this.logger.error('Failed to load working directory configurations', error);
+    }
+  }
+
+  private saveToFile(): void {
+    try {
+      const data: Record<string, WorkingDirectoryConfig> = {};
+      for (const [key, value] of this.configs.entries()) {
+        data[key] = value;
+      }
+
+      fs.writeFileSync(PERSISTENCE_FILE, JSON.stringify(data, null, 2), 'utf-8');
+      this.logger.debug('Saved working directory configurations', {
+        count: this.configs.size,
+        file: PERSISTENCE_FILE
+      });
+    } catch (error) {
+      this.logger.error('Failed to save working directory configurations', error);
+    }
+  }
 
   getConfigKey(channelId: string, threadTs?: string, userId?: string): string {
     if (threadTs) {
@@ -46,6 +92,7 @@ export class WorkingDirectoryManager {
       };
 
       this.configs.set(key, workingDirConfig);
+      this.saveToFile();
       this.logger.info('Working directory set', {
         key,
         directory: resolvedPath,
@@ -129,6 +176,7 @@ export class WorkingDirectoryManager {
     const key = this.getConfigKey(channelId, threadTs, userId);
     const result = this.configs.delete(key);
     if (result) {
+      this.saveToFile();
       this.logger.info('Working directory removed', { key });
     }
     return result;
