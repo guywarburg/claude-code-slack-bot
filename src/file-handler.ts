@@ -11,6 +11,7 @@ export interface ProcessedFile {
   mimetype: string;
   isImage: boolean;
   isText: boolean;
+  isAudio: boolean;
   size: number;
   tempPath?: string;
 }
@@ -67,6 +68,7 @@ export class FileHandler {
         mimetype: file.mimetype,
         isImage: this.isImageFile(file.mimetype),
         isText: this.isTextFile(file.mimetype),
+        isAudio: this.isAudioFile(file.mimetype),
         size: file.size,
         tempPath,
       };
@@ -101,6 +103,16 @@ export class FileHandler {
     ];
 
     return textTypes.some(type => mimetype.startsWith(type));
+  }
+
+  isAudioFile(mimetype: string): boolean {
+    // Slack voice messages come as audio/webm, audio/mp4, video/webm
+    // Also support standard audio formats
+    return (
+      mimetype.startsWith('audio/') ||
+      mimetype === 'video/webm' || // Slack voice messages
+      mimetype === 'video/mp4'     // Some mobile recordings
+    );
   }
 
   async formatFilePrompt(files: ProcessedFile[], userText: string): Promise<string> {

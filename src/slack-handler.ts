@@ -1,9 +1,9 @@
 import { App } from '@slack/bolt';
-import { ClaudeHandler } from './claude-handler';
-import { SDKMessage } from '@anthropic-ai/claude-code';
+import { ClaudeHandler, CLIMessage } from './claude-handler';
 import { Logger } from './logger';
 import { WorkingDirectoryManager } from './working-directory-manager';
 import { FileHandler, ProcessedFile } from './file-handler';
+import { VoiceHandler } from './voice-handler';
 import { TodoManager, Todo } from './todo-manager';
 import { McpManager } from './mcp-manager';
 import { permissionServer } from './permission-mcp-server';
@@ -33,12 +33,14 @@ export class SlackHandler {
   private logger = new Logger('SlackHandler');
   private workingDirManager: WorkingDirectoryManager;
   private fileHandler: FileHandler;
+  private voiceHandler: VoiceHandler;
   private todoManager: TodoManager;
   private mcpManager: McpManager;
   private todoMessages: Map<string, string> = new Map(); // sessionKey -> messageTs
   private originalMessages: Map<string, { channel: string; ts: string }> = new Map(); // sessionKey -> original message info
   private currentReactions: Map<string, string> = new Map(); // sessionKey -> current emoji
   private botUserId: string | null = null;
+  private voiceServicesAvailable: { stt: boolean; tts: boolean } = { stt: false, tts: false };
 
   constructor(app: App, claudeHandler: ClaudeHandler, mcpManager: McpManager) {
     this.app = app;
@@ -46,7 +48,18 @@ export class SlackHandler {
     this.mcpManager = mcpManager;
     this.workingDirManager = new WorkingDirectoryManager();
     this.fileHandler = new FileHandler();
+    this.voiceHandler = new VoiceHandler();
     this.todoManager = new TodoManager();
+
+    // Check voice service availability on startup
+    if (config.voice.enabled) {
+      this.checkVoiceServices();
+    }
+  }
+
+  private async checkVoiceServices(): Promise<void> {
+    this.voiceServicesAvailable = await this.voiceHandler.checkServicesAvailable();
+    this.logger.info('Voice services status', this.voiceServicesAvailable);
   }
 
   async handleMessage(event: MessageEvent, say: any) {
@@ -54,13 +67,25 @@ export class SlackHandler {
     
     // Process any attached files
     let processedFiles: ProcessedFile[] = [];
+    let voiceFile: ProcessedFile | undefined;
+    let isVoiceMessage = false;
+
     if (files && files.length > 0) {
       this.logger.info('Processing uploaded files', { count: files.length });
       processedFiles = await this.fileHandler.downloadAndProcessFiles(files);
-      
+
+      // Check if any file is a voice message
+      voiceFile = processedFiles.find(f => f.isAudio);
+      isVoiceMessage = !!voiceFile && config.voice.enabled;
+
       if (processedFiles.length > 0) {
+        const fileIcon = isVoiceMessage ? '🎤' : '📎';
+        const fileDescription = isVoiceMessage
+          ? 'voice message'
+          : `${processedFiles.length} file(s): ${processedFiles.map(f => f.name).join(', ')}`;
+
         await say({
-          text: `📎 Processing ${processedFiles.length} file(s): ${processedFiles.map(f => f.name).join(', ')}`,
+          text: `${fileIcon} Processing ${fileDescription}`,
           thread_ts: thread_ts || ts,
         });
       }
@@ -215,10 +240,56 @@ export class SlackHandler {
     let statusMessageTs: string | undefined;
 
     try {
-      // Prepare the prompt with file attachments
-      const finalPrompt = processedFiles.length > 0 
-        ? await this.fileHandler.formatFilePrompt(processedFiles, text || '')
-        : text || '';
+      // Handle voice message transcription
+      let voiceTranscription: string | undefined;
+      if (isVoiceMessage && voiceFile) {
+        // Check if voice services are available
+        if (!this.voiceServicesAvailable.stt) {
+          await this.checkVoiceServices();
+        }
+
+        if (!this.voiceServicesAvailable.stt) {
+          await say({
+            text: '⚠️ Voice transcription service is not available. Please ensure Whisper is running (`voicemode service whisper start`)',
+            thread_ts: thread_ts || ts,
+          });
+          await this.fileHandler.cleanupTempFiles(processedFiles);
+          return;
+        }
+
+        try {
+          voiceTranscription = await this.voiceHandler.transcribeAudio(voiceFile);
+          this.logger.info('Voice transcription completed', {
+            textLength: voiceTranscription.length,
+            preview: voiceTranscription.substring(0, 100)
+          });
+
+          // Show the transcription to the user
+          await say({
+            text: `📝 *Transcription:*\n> ${voiceTranscription}`,
+            thread_ts: thread_ts || ts,
+          });
+        } catch (transcriptionError) {
+          this.logger.error('Voice transcription failed', transcriptionError);
+          await say({
+            text: `❌ Failed to transcribe voice message: ${(transcriptionError as Error).message}`,
+            thread_ts: thread_ts || ts,
+          });
+          await this.fileHandler.cleanupTempFiles(processedFiles);
+          return;
+        }
+      }
+
+      // Prepare the prompt - use transcription for voice messages
+      let finalPrompt: string;
+      if (isVoiceMessage && voiceTranscription) {
+        // For voice messages, use transcription + any additional text
+        finalPrompt = voiceTranscription + (text ? `\n\nAdditional context: ${text}` : '');
+      } else if (processedFiles.length > 0) {
+        finalPrompt = await this.fileHandler.formatFilePrompt(processedFiles, text || '');
+      } else {
+        finalPrompt = text || '';
+      }
 
       this.logger.info('Sending query to Claude Code SDK', { 
         prompt: finalPrompt.substring(0, 200) + (finalPrompt.length > 200 ? '...' : ''), 
@@ -334,6 +405,17 @@ export class SlackHandler {
       // Update reaction to show completion
       await this.updateMessageReaction(sessionKey, '✅');
 
+      // Handle voice response if this was a voice message
+      if (isVoiceMessage && currentMessages.length > 0) {
+        await this.handleVoiceResponse(
+          currentMessages.join('\n\n'),
+          channel,
+          thread_ts || ts,
+          session,
+          say
+        );
+      }
+
       this.logger.info('Completed processing message', {
         sessionKey,
         messageCount: currentMessages.length,
@@ -399,7 +481,7 @@ export class SlackHandler {
     }
   }
 
-  private extractTextContent(message: SDKMessage): string | null {
+  private extractTextContent(message: CLIMessage): string | null {
     if (message.type === 'assistant' && message.message.content) {
       const textParts = message.message.content
         .filter((part: any) => part.type === 'text')
@@ -641,6 +723,106 @@ export class SlackHandler {
     }
 
     await this.updateMessageReaction(sessionKey, emoji);
+  }
+
+  private async handleVoiceResponse(
+    responseText: string,
+    channel: string,
+    threadTs: string,
+    session: any,
+    say: any
+  ): Promise<void> {
+    // Check if TTS is available
+    if (!this.voiceServicesAvailable.tts) {
+      await this.checkVoiceServices();
+    }
+
+    if (!this.voiceServicesAvailable.tts) {
+      this.logger.warn('TTS service not available, skipping voice response');
+      return;
+    }
+
+    // Check response mode
+    if (config.voice.responseMode === 'text') {
+      this.logger.debug('Voice response mode is text-only, skipping TTS');
+      return;
+    }
+
+    try {
+      let textToSpeak = responseText;
+
+      // If response is too long, ask Claude for a summary
+      if (this.voiceHandler.isResponseTooLongForVoice(responseText)) {
+        this.logger.info('Response too long for voice, requesting summary');
+
+        await say({
+          text: '🔊 *Generating voice summary...*',
+          thread_ts: threadTs,
+        });
+
+        // Get a summary from Claude
+        const summaryPrompt = this.voiceHandler.getVoiceSummaryPrompt(responseText);
+        const abortController = new AbortController();
+
+        let summary = '';
+        for await (const message of this.claudeHandler.streamQuery(
+          summaryPrompt,
+          session,
+          abortController,
+          session.workingDirectory || process.cwd(),
+          { channel, threadTs, user: session.userId }
+        )) {
+          if (message.type === 'assistant' && message.message.content) {
+            const textParts = message.message.content
+              .filter((part: any) => part.type === 'text')
+              .map((part: any) => part.text);
+            summary += textParts.join('');
+          } else if (message.type === 'result' && message.subtype === 'success') {
+            if ((message as any).result) {
+              summary = (message as any).result;
+            }
+          }
+        }
+
+        if (summary) {
+          textToSpeak = summary;
+          this.logger.info('Using summarized response for voice', {
+            originalLength: responseText.length,
+            summaryLength: summary.length
+          });
+        }
+      }
+
+      // Synthesize speech
+      this.logger.info('Synthesizing voice response');
+      const audioBuffer = await this.voiceHandler.synthesizeSpeech(textToSpeak);
+
+      // Save to temp file
+      const tempAudioPath = await this.voiceHandler.saveAudioToTemp(audioBuffer, 'response.mp3');
+
+      try {
+        // Upload audio to Slack using files.uploadV2
+        await this.app.client.filesUploadV2({
+          channel_id: channel,
+          thread_ts: threadTs,
+          file: tempAudioPath,
+          filename: 'voice_response.mp3',
+          title: 'Voice Response',
+        });
+
+        this.logger.info('Voice response uploaded to Slack');
+      } finally {
+        // Clean up temp file
+        await this.voiceHandler.cleanupTempFile(tempAudioPath);
+      }
+    } catch (error) {
+      this.logger.error('Failed to generate voice response', error);
+      // Don't fail the whole message, just log the error
+      await say({
+        text: '⚠️ Could not generate voice response',
+        thread_ts: threadTs,
+      });
+    }
   }
 
   private isMcpInfoCommand(text: string): boolean {

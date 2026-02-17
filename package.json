@@ -13,16 +13,17 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@types/form-data": "^2.2.1",
     "@types/node": "^24.0.4",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3"
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "^1.0.35",
     "@modelcontextprotocol/sdk": "^1.13.2",
     "@slack/bolt": "^4.4.0",
     "@types/node-fetch": "^2.6.12",
     "dotenv": "^16.6.0",
+    "form-data": "^4.0.5",
     "node-fetch": "^3.3.2"
   }
 }

@@ -2,6 +2,8 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+export type VoiceResponseMode = 'voice' | 'text' | 'both';
+
 export const config = {
   slack: {
     botToken: process.env.SLACK_BOT_TOKEN!,
@@ -17,6 +19,14 @@ export const config = {
   },
   baseDirectory: process.env.BASE_DIRECTORY || '',
   debug: process.env.DEBUG === 'true' || process.env.NODE_ENV === 'development',
+  voice: {
+    enabled: process.env.VOICE_ENABLED === 'true',
+    sttEndpoint: process.env.VOICE_STT_ENDPOINT || 'http://127.0.0.1:2022/v1',
+    ttsEndpoint: process.env.VOICE_TTS_ENDPOINT || 'http://127.0.0.1:8880/v1',
+    ttsVoice: process.env.VOICE_TTS_VOICE || 'af_sky',
+    ttsModel: process.env.VOICE_TTS_MODEL || 'kokoro',
+    responseMode: (process.env.VOICE_RESPONSE_MODE || 'voice') as VoiceResponseMode,
+  },
 };
 
 export function validateConfig() {
