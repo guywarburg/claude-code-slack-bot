@@ -1,4 +1,5 @@
 import { App } from '@slack/bolt';
+import cron from 'node-cron';
 import { ClaudeHandler, CLIMessage } from './claude-handler';
 import { Logger } from './logger';
 import { WorkingDirectoryManager } from './working-directory-manager';
@@ -950,14 +951,29 @@ export class SlackHandler {
       await ack();
       const approvalId = (body as any).actions[0].value;
       this.logger.info('Tool approval denied', { approvalId });
-      
+
       permissionServer.resolveApproval(approvalId, false);
-      
+
       await respond({
         response_type: 'ephemeral',
         text: '❌ Tool execution denied'
       });
     });
+
+    // Daily scheduled message to #sentry at 9:00 AM local time
+    cron.schedule('0 9 * * *', async () => {
+      try {
+        await this.app.client.chat.postMessage({
+          channel: '#sentry',
+          text: 'run the command triage-sentry'
+        });
+        this.logger.info('Sent scheduled triage-sentry message to #sentry');
+      } catch (error) {
+        this.logger.error('Failed to send scheduled message to #sentry', error);
+      }
+    });
+
+    this.logger.info('Scheduled daily 9:00 AM message to #sentry');
 
     // Cleanup inactive sessions periodically
     setInterval(() => {
