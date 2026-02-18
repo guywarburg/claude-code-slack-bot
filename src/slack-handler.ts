@@ -10,7 +10,7 @@ import { McpManager } from './mcp-manager';
 import { permissionServer } from './permission-mcp-server';
 import { config } from './config';
 
-interface MessageEvent {
+export interface MessageEvent {
   user: string;
   channel: string;
   thread_ts?: string;
@@ -102,6 +102,8 @@ export class SlackHandler {
       ts,
       text: text ? text.substring(0, 100) + (text.length > 100 ? '...' : '') : '[no text]',
       fileCount: processedFiles.length,
+      isVoiceMessage,
+      channelStartsWithD: channel?.startsWith('D'),
     });
 
     // Check if this is a working directory command (only if there's text)
@@ -183,8 +185,19 @@ export class SlackHandler {
 
     // Working directory is always required
     if (!workingDirectory) {
+      // Log detailed debug info when working directory lookup fails
+      this.logger.warn('Working directory lookup failed', {
+        channel,
+        thread_ts: thread_ts || null,
+        ts,
+        isDM,
+        hasChannelConfig: this.workingDirManager.hasChannelWorkingDirectory(channel),
+        isVoiceMessage,
+        fileCount: processedFiles.length,
+      });
+
       let errorMessage = `⚠️ No working directory set. `;
-      
+
       if (!isDM && !this.workingDirManager.hasChannelWorkingDirectory(channel)) {
         // No channel default set
         errorMessage += `Please set a default working directory for this channel first using:\n`;
@@ -205,7 +218,7 @@ export class SlackHandler {
       } else {
         errorMessage += `Please set one first using:\n\`cwd /path/to/directory\``;
       }
-      
+
       await say({
         text: errorMessage,
         thread_ts: thread_ts || ts,
@@ -482,6 +495,37 @@ export class SlackHandler {
     }
   }
 
+  /**
+   * Process a queued message from the offline queue.
+   * Creates a synthetic say function and calls handleMessage().
+   */
+  async processQueuedMessage(message: MessageEvent): Promise<void> {
+    this.logger.info('Processing queued message', {
+      channel: message.channel,
+      user: message.user,
+      ts: message.ts,
+      thread_ts: message.thread_ts,
+      textPreview: message.text?.substring(0, 50),
+    });
+
+    // Create a synthetic say function that posts messages to the channel
+    const say = async (opts: { text: string; thread_ts?: string }) => {
+      try {
+        const result = await this.app.client.chat.postMessage({
+          channel: message.channel,
+          text: opts.text,
+          thread_ts: opts.thread_ts,
+        });
+        return { ts: result.ts };
+      } catch (error) {
+        this.logger.error('Failed to post message from queue', error);
+        throw error;
+      }
+    };
+
+    await this.handleMessage(message, say);
+  }
+
   private extractTextContent(message: CLIMessage): string | null {
     if (message.type === 'assistant' && message.message.content) {
       const textParts = message.message.content
@@ -733,19 +777,28 @@ export class SlackHandler {
     session: any,
     say: any
   ): Promise<void> {
+    this.logger.info('Starting voice response generation', {
+      responseLength: responseText.length,
+      channel,
+      threadTs,
+      responseMode: config.voice.responseMode,
+      ttsAvailable: this.voiceServicesAvailable.tts,
+    });
+
     // Check if TTS is available
     if (!this.voiceServicesAvailable.tts) {
+      this.logger.info('TTS not cached as available, rechecking services...');
       await this.checkVoiceServices();
     }
 
     if (!this.voiceServicesAvailable.tts) {
-      this.logger.warn('TTS service not available, skipping voice response');
+      this.logger.warn('TTS service not available after recheck, skipping voice response');
       return;
     }
 
     // Check response mode
     if (config.voice.responseMode === 'text') {
-      this.logger.debug('Voice response mode is text-only, skipping TTS');
+      this.logger.info('Voice response mode is text-only, skipping TTS');
       return;
     }
 
@@ -795,14 +848,21 @@ export class SlackHandler {
       }
 
       // Synthesize speech
-      this.logger.info('Synthesizing voice response');
+      this.logger.info('Synthesizing voice response', {
+        textLength: textToSpeak.length,
+        textPreview: textToSpeak.substring(0, 100),
+        ttsEndpoint: config.voice.ttsEndpoint,
+      });
       const audioBuffer = await this.voiceHandler.synthesizeSpeech(textToSpeak);
+      this.logger.info('Speech synthesis successful', { audioSize: audioBuffer.length });
 
       // Save to temp file
       const tempAudioPath = await this.voiceHandler.saveAudioToTemp(audioBuffer, 'response.mp3');
+      this.logger.info('Audio saved to temp file', { path: tempAudioPath });
 
       try {
         // Upload audio to Slack using files.uploadV2
+        this.logger.info('Uploading voice response to Slack', { channel, threadTs });
         await this.app.client.filesUploadV2({
           channel_id: channel,
           thread_ts: threadTs,
@@ -811,16 +871,21 @@ export class SlackHandler {
           title: 'Voice Response',
         });
 
-        this.logger.info('Voice response uploaded to Slack');
+        this.logger.info('Voice response uploaded to Slack successfully');
       } finally {
         // Clean up temp file
         await this.voiceHandler.cleanupTempFile(tempAudioPath);
       }
-    } catch (error) {
-      this.logger.error('Failed to generate voice response', error);
+    } catch (error: any) {
+      this.logger.error('Failed to generate voice response', {
+        error: error.message || error,
+        stack: error.stack,
+        code: error.code,
+        ttsEndpoint: config.voice.ttsEndpoint,
+      });
       // Don't fail the whole message, just log the error
       await say({
-        text: '⚠️ Could not generate voice response',
+        text: `⚠️ Could not generate voice response: ${error.message || 'Unknown error'}`,
         thread_ts: threadTs,
       });
     }
@@ -845,6 +910,186 @@ export class SlackHandler {
       }
     }
     return this.botUserId;
+  }
+
+  /**
+   * Execute a scheduled task by directly invoking the Claude handler.
+   * This simulates an internal message without needing an external trigger.
+   */
+  async executeScheduledTask(channel: string, prompt: string): Promise<void> {
+    this.logger.info('Executing scheduled task', { channel, prompt });
+
+    // Resolve channel name to ID if needed (e.g., #sentry -> C12345)
+    let channelId = channel;
+    if (channel.startsWith('#')) {
+      try {
+        const result = await this.app.client.conversations.list({
+          types: 'public_channel,private_channel',
+          limit: 1000,
+        });
+        const channelName = channel.slice(1);
+        const found = result.channels?.find((c: any) => c.name === channelName);
+        if (found?.id) {
+          channelId = found.id;
+        } else {
+          this.logger.error('Channel not found', { channel });
+          return;
+        }
+      } catch (error) {
+        this.logger.error('Failed to resolve channel', error);
+        return;
+      }
+    }
+
+    // Get working directory for this channel
+    const workingDirectory = this.workingDirManager.getWorkingDirectory(channelId);
+    if (!workingDirectory) {
+      this.logger.error('No working directory set for scheduled task channel', { channel, channelId });
+      return;
+    }
+
+    // Create a synthetic session for the scheduled task
+    const systemUser = 'SYSTEM';
+    const sessionKey = this.claudeHandler.getSessionKey(systemUser, channelId, `scheduled-${Date.now()}`);
+
+    let session = this.claudeHandler.createSession(systemUser, channelId, `scheduled-${Date.now()}`);
+    const abortController = new AbortController();
+    this.activeControllers.set(sessionKey, abortController);
+
+    // Post initial status message
+    let statusMessageTs: string | undefined;
+    let threadTs: string | undefined;
+
+    try {
+      const statusResult = await this.app.client.chat.postMessage({
+        channel: channelId,
+        text: '🤔 *Running scheduled task...*',
+      });
+      statusMessageTs = statusResult.ts as string;
+      threadTs = statusResult.ts as string;
+
+      // Store for reaction updates
+      if (statusMessageTs) {
+        this.originalMessages.set(sessionKey, { channel: channelId, ts: statusMessageTs });
+      }
+
+      await this.updateMessageReaction(sessionKey, 'thinking_face');
+
+      const slackContext = {
+        channel: channelId,
+        threadTs,
+        user: systemUser
+      };
+
+      let currentMessages: string[] = [];
+
+      for await (const message of this.claudeHandler.streamQuery(prompt, session, abortController, workingDirectory, slackContext)) {
+        if (abortController.signal.aborted) break;
+
+        if (message.type === 'assistant') {
+          const hasToolUse = message.message.content?.some((part: any) => part.type === 'tool_use');
+
+          if (hasToolUse) {
+            if (statusMessageTs) {
+              await this.app.client.chat.update({
+                channel: channelId,
+                ts: statusMessageTs,
+                text: '⚙️ *Working...*',
+              });
+            }
+            await this.updateMessageReaction(sessionKey, 'gear');
+
+            const todoTool = message.message.content?.find((part: any) =>
+              part.type === 'tool_use' && part.name === 'TodoWrite'
+            );
+
+            if (todoTool && threadTs) {
+              await this.handleTodoUpdate(todoTool.input, sessionKey, session?.sessionId, channelId, threadTs, async (opts: any) => {
+                return await this.app.client.chat.postMessage({
+                  channel: channelId,
+                  thread_ts: opts.thread_ts,
+                  text: opts.text,
+                });
+              });
+            }
+
+            const toolContent = this.formatToolUse(message.message.content);
+            if (toolContent && threadTs) {
+              await this.app.client.chat.postMessage({
+                channel: channelId,
+                thread_ts: threadTs,
+                text: toolContent,
+              });
+            }
+          } else {
+            const content = this.extractTextContent(message);
+            if (content && threadTs) {
+              currentMessages.push(content);
+              const formatted = this.formatMessage(content, false);
+              await this.app.client.chat.postMessage({
+                channel: channelId,
+                thread_ts: threadTs,
+                text: formatted,
+              });
+            }
+          }
+        } else if (message.type === 'result') {
+          if (message.subtype === 'success' && (message as any).result) {
+            const finalResult = (message as any).result;
+            if (finalResult && !currentMessages.includes(finalResult) && threadTs) {
+              const formatted = this.formatMessage(finalResult, true);
+              await this.app.client.chat.postMessage({
+                channel: channelId,
+                thread_ts: threadTs,
+                text: formatted,
+              });
+            }
+          }
+        }
+      }
+
+      // Update status to completed
+      if (statusMessageTs) {
+        await this.app.client.chat.update({
+          channel: channelId,
+          ts: statusMessageTs,
+          text: '✅ *Scheduled task completed*',
+        });
+      }
+      await this.updateMessageReaction(sessionKey, 'white_check_mark');
+
+      this.logger.info('Scheduled task completed', { channel, sessionKey });
+    } catch (error: any) {
+      this.logger.error('Error executing scheduled task', error);
+
+      if (statusMessageTs) {
+        await this.app.client.chat.update({
+          channel: channelId,
+          ts: statusMessageTs,
+          text: '❌ *Scheduled task failed*',
+        });
+      }
+      await this.updateMessageReaction(sessionKey, 'x');
+
+      if (threadTs) {
+        await this.app.client.chat.postMessage({
+          channel: channelId,
+          thread_ts: threadTs,
+          text: `Error: ${error.message || 'Something went wrong'}`,
+        });
+      }
+    } finally {
+      this.activeControllers.delete(sessionKey);
+
+      if (session?.sessionId) {
+        setTimeout(() => {
+          this.todoManager.cleanupSession(session.sessionId!);
+          this.todoMessages.delete(sessionKey);
+          this.originalMessages.delete(sessionKey);
+          this.currentReactions.delete(sessionKey);
+        }, 5 * 60 * 1000);
+      }
+    }
   }
 
   private async handleChannelJoin(channelId: string, say: any): Promise<void> {
@@ -918,8 +1163,38 @@ export class SlackHandler {
     this.app.event('message', async ({ event, say }) => {
       // Only handle file uploads that are not from bots and have files
       if (event.subtype === 'file_share' && 'user' in event && event.files) {
-        this.logger.info('Handling file upload event');
-        await this.handleMessage(event as MessageEvent, say);
+        const fileEvent = event as any;
+
+        // Log full event details to debug voice message thread context loss
+        this.logger.info('Handling file upload event', {
+          channel: fileEvent.channel,
+          thread_ts: fileEvent.thread_ts || null,
+          ts: fileEvent.ts,
+          user: fileEvent.user,
+          filesCount: fileEvent.files?.length,
+          hasText: !!fileEvent.text,
+          // Additional fields that might help debug
+          parent_user_id: fileEvent.parent_user_id || null,
+          channel_type: fileEvent.channel_type || null,
+          // Check if this is a reply without thread_ts (potential Slack bug)
+          eventKeys: Object.keys(fileEvent).sort().join(','),
+        });
+
+        // WORKAROUND: For voice clips and other file uploads in threads,
+        // Slack sometimes doesn't include thread_ts. Try to detect and fix this.
+        let messageEvent = event as MessageEvent;
+
+        // If we have parent_user_id but no thread_ts, this might be a reply
+        // that lost its thread context (common with voice clips)
+        if (!fileEvent.thread_ts && fileEvent.parent_user_id) {
+          this.logger.warn('File upload appears to be a reply but missing thread_ts', {
+            channel: fileEvent.channel,
+            parent_user_id: fileEvent.parent_user_id,
+            ts: fileEvent.ts,
+          });
+        }
+
+        await this.handleMessage(messageEvent, say);
       }
     });
 
@@ -960,20 +1235,13 @@ export class SlackHandler {
       });
     });
 
-    // Daily scheduled message to #sentry at 9:00 AM local time
+    // Daily scheduled task to #sentry at 9:00 AM local time
     cron.schedule('0 9 * * *', async () => {
-      try {
-        await this.app.client.chat.postMessage({
-          channel: '#sentry',
-          text: 'run the command triage-sentry'
-        });
-        this.logger.info('Sent scheduled triage-sentry message to #sentry');
-      } catch (error) {
-        this.logger.error('Failed to send scheduled message to #sentry', error);
-      }
+      this.logger.info('Running scheduled triage-sentry task');
+      await this.executeScheduledTask('#sentry', 'triage-sentry');
     });
 
-    this.logger.info('Scheduled daily 9:00 AM message to #sentry');
+    this.logger.info('Scheduled daily 9:00 AM triage-sentry task to #sentry');
 
     // Cleanup inactive sessions periodically
     setInterval(() => {
