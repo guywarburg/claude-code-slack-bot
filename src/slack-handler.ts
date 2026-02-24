@@ -166,6 +166,15 @@ export class SlackHandler {
       return;
     }
 
+    // Check if this is a list all directories command (only if there's text)
+    if (text && this.workingDirManager.isListCommand(text)) {
+      await say({
+        text: this.workingDirManager.formatListMessage(),
+        thread_ts: thread_ts || ts,
+      });
+      return;
+    }
+
     // Check if this is an MCP info command (only if there's text)
     if (text && this.isMcpInfoCommand(text)) {
       await say({
