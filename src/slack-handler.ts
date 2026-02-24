@@ -117,18 +117,25 @@ export class SlackHandler {
     });
 
     // Check if this is a working directory command (only if there's text)
-    const setDirPath = text ? this.workingDirManager.parseSetCommand(text) : null;
-    if (setDirPath) {
+    const setDirCommand = text ? this.workingDirManager.parseSetCommand(text) : null;
+    if (setDirCommand) {
       const isDM = channel.startsWith('D');
+      // If forceChannel is true, don't pass thread_ts to set at channel level
+      const effectiveThreadTs = setDirCommand.forceChannel ? undefined : thread_ts;
       const result = this.workingDirManager.setWorkingDirectory(
         channel,
-        setDirPath,
-        thread_ts,
+        setDirCommand.path,
+        effectiveThreadTs,
         isDM ? user : undefined
       );
 
       if (result.success) {
-        const context = thread_ts ? 'this thread' : (isDM ? 'this conversation' : 'this channel');
+        let context: string;
+        if (setDirCommand.forceChannel) {
+          context = isDM ? 'this conversation' : 'this channel (all threads)';
+        } else {
+          context = thread_ts ? 'this thread' : (isDM ? 'this conversation' : 'this channel');
+        }
         await say({
           text: `✅ Working directory set for ${context}: \`${result.resolvedPath}\``,
           thread_ts: thread_ts || ts,
