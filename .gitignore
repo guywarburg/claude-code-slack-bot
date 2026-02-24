@@ -8,6 +8,9 @@ node_modules/
 .env.*.local
 
 mcp-servers.json
+scheduled-tasks.json
+working-directories.json
+offline-queue-state.json
 
 # Build output
 dist/

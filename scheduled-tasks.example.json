@@ -1,0 +1,24 @@
+{
+  "tasks": [
+    {
+      "cron": "0 9 * * *",
+      "channel": "#general",
+      "prompt": "good-morning",
+      "description": "Daily morning greeting",
+      "enabled": true
+    },
+    {
+      "cron": "0 9 * * 1-5",
+      "channel": "#engineering",
+      "prompt": "Review open pull requests and summarize their status",
+      "description": "Weekday PR review summary"
+    },
+    {
+      "cron": "0 17 * * 5",
+      "channel": "#team",
+      "prompt": "Generate a weekly summary of completed work",
+      "description": "Friday weekly summary",
+      "enabled": false
+    }
+  ]
+}

@@ -1,5 +1,4 @@
 import { App } from '@slack/bolt';
-import cron from 'node-cron';
 import { ClaudeHandler, CLIMessage } from './claude-handler';
 import { Logger } from './logger';
 import { WorkingDirectoryManager } from './working-directory-manager';
@@ -7,6 +6,7 @@ import { FileHandler, ProcessedFile } from './file-handler';
 import { VoiceHandler } from './voice-handler';
 import { TodoManager, Todo } from './todo-manager';
 import { McpManager } from './mcp-manager';
+import { ScheduledTasksManager } from './scheduled-tasks-manager';
 import { permissionServer } from './permission-mcp-server';
 import { config } from './config';
 
@@ -37,6 +37,7 @@ export class SlackHandler {
   private voiceHandler: VoiceHandler;
   private todoManager: TodoManager;
   private mcpManager: McpManager;
+  private scheduledTasksManager: ScheduledTasksManager;
   private todoMessages: Map<string, string> = new Map(); // sessionKey -> messageTs
   private originalMessages: Map<string, { channel: string; ts: string }> = new Map(); // sessionKey -> original message info
   private currentReactions: Map<string, string> = new Map(); // sessionKey -> current emoji
@@ -51,6 +52,7 @@ export class SlackHandler {
     this.fileHandler = new FileHandler();
     this.voiceHandler = new VoiceHandler();
     this.todoManager = new TodoManager();
+    this.scheduledTasksManager = new ScheduledTasksManager();
 
     // Check voice service availability on startup
     if (config.voice.enabled) {
@@ -1295,21 +1297,10 @@ export class SlackHandler {
       });
     });
 
-    // Daily scheduled task to #sentry at 9:00 AM local time
-    cron.schedule('0 9 * * *', async () => {
-      this.logger.info('Running scheduled triage-sentry task');
-      await this.executeScheduledTask('#sentry', 'triage-sentry');
-    });
-
-    this.logger.info('Scheduled daily 9:00 AM triage-sentry task to #sentry');
-
-    // Daily scheduled task to #aws at 9:00 AM local time
-    cron.schedule('0 9 * * *', async () => {
-      this.logger.info('Running scheduled aws-logs-review task');
-      await this.executeScheduledTask('#aws', 'aws-logs-review');
-    });
-
-    this.logger.info('Scheduled daily 9:00 AM aws-logs-review task to #aws');
+    // Load and schedule tasks from configuration
+    this.scheduledTasksManager.scheduleAll((channel, prompt) =>
+      this.executeScheduledTask(channel, prompt)
+    );
 
     // Cleanup inactive sessions periodically
     setInterval(() => {

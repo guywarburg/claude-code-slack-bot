@@ -18,6 +18,7 @@ The bot allows users to interact with Claude Code through Slack, providing real-
 - **`src/file-handler.ts`** - File upload processing and content embedding
 - **`src/todo-manager.ts`** - Task list management and progress tracking
 - **`src/mcp-manager.ts`** - MCP server configuration and management
+- **`src/scheduled-tasks-manager.ts`** - Scheduled/cron task configuration and execution
 - **`src/logger.ts`** - Structured logging utility
 - **`src/types.ts`** - TypeScript type definitions
 
@@ -65,6 +66,13 @@ The bot allows users to interact with Claude Code through Slack, providing real-
 - **Runtime Management**: Reload configuration without restarting the bot
 - **Popular Integrations**: Filesystem access, GitHub API, database connections, web search
 
+#### 7. Scheduled Tasks
+- **Cron-Based Scheduling**: Configure recurring tasks using standard cron expressions
+- **Channel Targeting**: Tasks can target specific channels by name or ID
+- **Configurable Prompts**: Each task executes a custom prompt
+- **Enable/Disable**: Individual tasks can be enabled or disabled without removal
+- **Auto-Configuration**: Loads tasks from `scheduled-tasks.json` automatically
+
 ## Environment Configuration
 
 ### Required Variables
@@ -98,6 +106,7 @@ DEBUG=true
 - `channels:history` - Read channel messages
 - `chat:write` - Send messages
 - `chat:write.public` - Write to public channels
+- `files:write` - Upload files (required for voice responses)
 - `im:history` - Read direct messages
 - `im:read` - Basic DM info
 - `im:write` - Send direct messages
@@ -156,7 +165,7 @@ Progress: 1/3 tasks completed (33%)
 User: mcp
 Bot: 🔧 MCP Servers Configured:
      • filesystem (stdio)
-     • github (stdio)  
+     • github (stdio)
      • postgres (stdio)
 
 # Reload MCP configuration
@@ -167,6 +176,35 @@ Bot: ✅ MCP configuration reloaded successfully.
 User: @ClaudeBot list all TODO comments in the project
 Bot: [Uses mcp__filesystem tools to search files]
 ```
+
+### Scheduled Tasks
+Configure recurring tasks in `scheduled-tasks.json`:
+```json
+{
+  "tasks": [
+    {
+      "cron": "0 9 * * *",
+      "channel": "#daily-standup",
+      "prompt": "summarize-yesterday",
+      "description": "Daily standup summary",
+      "enabled": true
+    },
+    {
+      "cron": "0 9 * * 1-5",
+      "channel": "#engineering",
+      "prompt": "Review open pull requests",
+      "description": "Weekday PR review"
+    }
+  ]
+}
+```
+
+Task configuration options:
+- `cron`: Standard cron expression (e.g., `0 9 * * *` for daily at 9 AM)
+- `channel`: Target channel name (`#channel`) or ID
+- `prompt`: The prompt/command to execute
+- `description`: Optional human-readable description
+- `enabled`: Optional boolean to enable/disable (defaults to true)
 
 ## Development
 
@@ -189,12 +227,15 @@ src/
 ├── file-handler.ts               # File processing
 ├── todo-manager.ts               # Task tracking
 ├── mcp-manager.ts                # MCP server management
+├── scheduled-tasks-manager.ts    # Scheduled task management
 ├── logger.ts                     # Logging utility
 └── types.ts                      # Type definitions
 
 # Configuration files
-mcp-servers.json                  # MCP server configuration
+mcp-servers.json                  # MCP server configuration (gitignored)
 mcp-servers.example.json          # Example MCP configuration
+scheduled-tasks.json              # Scheduled tasks configuration (gitignored)
+scheduled-tasks.example.json      # Example scheduled tasks configuration
 ```
 
 ### Key Design Decisions

@@ -228,6 +228,48 @@ The bot supports MCP servers to extend Claude's capabilities with additional too
 - **View configured servers**: `mcp` or `servers`
 - **Reload configuration**: `mcp reload`
 
+### Scheduled Tasks
+
+Configure recurring tasks that run automatically on a schedule.
+
+#### Setup Scheduled Tasks
+
+1. **Create scheduled tasks configuration file:**
+   ```bash
+   cp scheduled-tasks.example.json scheduled-tasks.json
+   ```
+
+2. **Configure your tasks** in `scheduled-tasks.json`:
+   ```json
+   {
+     "tasks": [
+       {
+         "cron": "0 9 * * *",
+         "channel": "#daily-standup",
+         "prompt": "summarize-yesterday",
+         "description": "Daily standup summary",
+         "enabled": true
+       },
+       {
+         "cron": "0 9 * * 1-5",
+         "channel": "#engineering",
+         "prompt": "Review open pull requests and summarize their status",
+         "description": "Weekday PR review"
+       }
+     ]
+   }
+   ```
+
+#### Task Configuration Options
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `cron` | Yes | Standard cron expression (e.g., `0 9 * * *` for daily at 9 AM) |
+| `channel` | Yes | Target channel name (`#channel`) or channel ID |
+| `prompt` | Yes | The prompt/command to execute |
+| `description` | No | Human-readable description for logging |
+| `enabled` | No | Set to `false` to disable without removing (defaults to `true`) |
+
 ## Advanced Configuration
 
 ### CLI Options
@@ -281,6 +323,7 @@ src/
 ├── image-handler.ts              # Image processing
 ├── todo-manager.ts               # Todo list management
 ├── mcp-manager.ts                # MCP server configuration
+├── scheduled-tasks-manager.ts    # Scheduled task configuration
 ├── permission-mcp-server.ts      # Slack permission prompts (MCP)
 └── logger.ts                     # Logging utility
 ```
