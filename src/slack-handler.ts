@@ -201,6 +201,28 @@ export class SlackHandler {
       return;
     }
 
+    // Validate that we have a channel - file_share events for voice clips
+    // sometimes have missing or malformed channel data
+    if (!channel) {
+      this.logger.error('Missing channel in message event', {
+        user,
+        ts,
+        thread_ts: thread_ts || null,
+        hasFiles: processedFiles.length > 0,
+        isVoiceMessage,
+        eventKeys: Object.keys(event).sort().join(','),
+      });
+      await say({
+        text: '❌ Unable to process message: channel information is missing. This can happen with voice clips. Please try sending a text message first.',
+        thread_ts: thread_ts || ts,
+      });
+      // Clean up temp files before returning
+      if (processedFiles.length > 0) {
+        await this.fileHandler.cleanupTempFiles(processedFiles);
+      }
+      return;
+    }
+
     // Check if we have a working directory set
     const isDM = channel.startsWith('D');
     const workingDirectory = this.workingDirManager.getWorkingDirectory(
@@ -1207,7 +1229,7 @@ export class SlackHandler {
         });
 
         // WORKAROUND: For voice clips and other file uploads in threads,
-        // Slack sometimes doesn't include thread_ts. Try to detect and fix this.
+        // Slack sometimes doesn't include thread_ts or channel. Try to detect and fix this.
         let messageEvent = event as MessageEvent;
 
         // If we have parent_user_id but no thread_ts, this might be a reply
@@ -1218,6 +1240,18 @@ export class SlackHandler {
             parent_user_id: fileEvent.parent_user_id,
             ts: fileEvent.ts,
           });
+        }
+
+        // Validate channel exists before processing
+        if (!fileEvent.channel) {
+          this.logger.error('File upload event missing channel', {
+            user: fileEvent.user,
+            ts: fileEvent.ts,
+            filesCount: fileEvent.files?.length,
+            eventKeys: Object.keys(fileEvent).sort().join(','),
+          });
+          // Can't process without a channel - inform the user if possible
+          return;
         }
 
         await this.handleMessage(messageEvent, say);
