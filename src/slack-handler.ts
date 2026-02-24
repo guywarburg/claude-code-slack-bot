@@ -85,10 +85,20 @@ export class SlackHandler {
           ? 'voice message'
           : `${processedFiles.length} file(s): ${processedFiles.map(f => f.name).join(', ')}`;
 
-        await say({
-          text: `${fileIcon} Processing ${fileDescription}`,
-          thread_ts: thread_ts || ts,
-        });
+        try {
+          await say({
+            text: `${fileIcon} Processing ${fileDescription}`,
+            thread_ts: thread_ts || ts,
+          });
+        } catch (error) {
+          this.logger.error('Failed to send file processing notification', {
+            error: (error as Error).message,
+            channel,
+            thread_ts: thread_ts || null,
+            ts,
+          });
+          // Continue processing even if the notification fails
+        }
       }
     }
 
