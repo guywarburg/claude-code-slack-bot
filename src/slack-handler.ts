@@ -1303,6 +1303,14 @@ export class SlackHandler {
 
     this.logger.info('Scheduled daily 9:00 AM triage-sentry task to #sentry');
 
+    // Daily scheduled task to #aws at 9:00 AM local time
+    cron.schedule('0 9 * * *', async () => {
+      this.logger.info('Running scheduled aws-logs-review task');
+      await this.executeScheduledTask('#aws', 'aws-logs-review');
+    });
+
+    this.logger.info('Scheduled daily 9:00 AM aws-logs-review task to #aws');
+
     // Cleanup inactive sessions periodically
     setInterval(() => {
       this.logger.debug('Running session cleanup');
