@@ -216,6 +216,174 @@ npm run dev     # Development with hot reload
 npm run prod    # Production mode
 ```
 
+## Production Deployment
+
+To keep the bot running persistently in production, use one of the following approaches:
+
+### Option 1: PM2 (Recommended for Node.js)
+
+PM2 is a production process manager for Node.js with built-in load balancing, monitoring, and auto-restart.
+
+```bash
+# Install PM2 globally
+npm install -g pm2
+
+# Start the bot with PM2
+pm2 start npm --name "slack-assist" -- run prod
+
+# Configure PM2 to start on system boot
+pm2 startup
+pm2 save
+
+# Useful PM2 commands
+pm2 status              # View running processes
+pm2 logs slack-assist   # View logs
+pm2 restart slack-assist # Restart the bot
+pm2 stop slack-assist   # Stop the bot
+pm2 monit               # Real-time monitoring dashboard
+```
+
+Alternatively, create an `ecosystem.config.js` file:
+```javascript
+module.exports = {
+  apps: [{
+    name: 'slack-assist',
+    script: 'dist/index.js',
+    instances: 1,
+    autorestart: true,
+    watch: false,
+    max_memory_restart: '1G',
+    env: {
+      NODE_ENV: 'production'
+    }
+  }]
+};
+```
+
+Then run:
+```bash
+pm2 start ecosystem.config.js
+```
+
+### Option 2: systemd (Linux)
+
+Create a systemd service file at `/etc/systemd/system/slack-assist.service`:
+
+```ini
+[Unit]
+Description=Claude Code Slack Bot
+After=network.target
+
+[Service]
+Type=simple
+User=your-username
+WorkingDirectory=/path/to/slack-assist
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=10
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=slack-assist
+EnvironmentFile=/path/to/slack-assist/.env
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then enable and start the service:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable slack-assist
+sudo systemctl start slack-assist
+
+# Useful commands
+sudo systemctl status slack-assist   # Check status
+sudo journalctl -u slack-assist -f   # View logs
+sudo systemctl restart slack-assist  # Restart
+```
+
+### Option 3: launchd (macOS)
+
+Create a plist file at `~/Library/LaunchAgents/com.slack-assist.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.slack-assist</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/node</string>
+        <string>/path/to/slack-assist/dist/index.js</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/path/to/slack-assist</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/path/to/slack-assist/logs/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/path/to/slack-assist/logs/stderr.log</string>
+</dict>
+</plist>
+```
+
+Load and start the service:
+```bash
+launchctl load ~/Library/LaunchAgents/com.slack-assist.plist
+
+# Useful commands
+launchctl list | grep slack-assist   # Check if running
+launchctl unload ~/Library/LaunchAgents/com.slack-assist.plist  # Stop
+launchctl load ~/Library/LaunchAgents/com.slack-assist.plist    # Start
+```
+
+### Option 4: Docker
+
+Create a `Dockerfile`:
+```dockerfile
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY dist ./dist
+CMD ["node", "dist/index.js"]
+```
+
+Build and run:
+```bash
+docker build -t slack-assist .
+docker run -d --name slack-assist --restart always --env-file .env slack-assist
+```
+
+Or use Docker Compose with a `docker-compose.yml`:
+```yaml
+version: '3.8'
+services:
+  slack-assist:
+    build: .
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./mcp-servers.json:/app/mcp-servers.json:ro
+      - ./scheduled-tasks.json:/app/scheduled-tasks.json:ro
+```
+
+Run with:
+```bash
+docker-compose up -d
+```
+
 ### Project Structure
 ```
 src/
