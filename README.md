@@ -369,6 +369,11 @@ The bot converts Claude's markdown to Slack's formatting. Some complex formattin
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
+## Acknowledgments
+
+- [mpociot/claude-code-slack-bot](https://github.com/mpociot/claude-code-slack-bot) - Original SDK-based Slack bot
+- [MattKilmer/claude-autofix-bot](https://github.com/MattKilmer/claude-autofix-bot) - CLI process management inspiration
+
 ## License
 
 MIT
